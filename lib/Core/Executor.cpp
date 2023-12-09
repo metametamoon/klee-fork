@@ -104,8 +104,10 @@ DISABLE_WARNING_DEPRECATED_DECLARATIONS
 typedef unsigned TypeSize;
 #endif
 #include "llvm/Support/raw_ostream.h"
+#include <fmt/core.h>
 DISABLE_WARNING_POP
 
+#include <signal.h>
 #include <algorithm>
 #include <cassert>
 #include <cerrno>
@@ -4925,8 +4927,11 @@ void Executor::goBackward(ref<BackwardAction> action) {
   // Conflict::core_ty conflictCore;
   // ExprHashMap<ref<Expr>> rebuildMap;
 
+  bool isGoodConsecutionCheckProp =
+      (pob->kind == ProofObligation::Kind::ConsecutionCheck) &&
+      state->getInitPCBlock() == pob->lemmaCheckData->starting_location;
   Executor::ComposeResult composeResult;
-  if (canReachSomeTargetThroughState(*pob, *state)) {
+  if (canReachSomeTargetThroughState(*pob, *state) || isGoodConsecutionCheckProp) {
     auto nullPointerExpr =
         state->nullPointerExpr ? state->nullPointerExpr : pob->nullPointerExpr;
     composeResult =
@@ -4938,6 +4943,32 @@ void Executor::goBackward(ref<BackwardAction> action) {
   // ProofObligation *newPob = new ProofObligation(state->initPC->parent, pob);
   // bool success = Composer::tryRebuild(*pob, *state, *newPob, conflictCore,
   // rebuildMap); timers.invoke();
+
+  if (pob->kind == ProofObligation::Kind::ConsecutionCheck) {
+    assert(pob->lemmaCheckData != nullptr);
+    if (state->getInitPCBlock() != pob->lemmaCheckData->starting_location) {
+        llvm::errs() << "Composition failed between lemma consecution check pob and not matched state\n";
+        return;
+    }
+    if (composeResult.success) {
+      auto weakestPreconditionNoLemma = composeResult.composed;
+
+      bool wpNoLemmaImpliesNoLemma = false;
+      auto result = this->solver->mustBeTrue(
+          weakestPreconditionNoLemma.cs(), NotExpr::create(pob->lemmaCheckData->lemma_to_check->asExpr()),
+          wpNoLemmaImpliesNoLemma, state->queryMetaData);
+      llvm::errs() << fmt::format(
+          "[backward] consecution check on path {} is successfull: {}\n",
+          state->constraints.path().toString(), wpNoLemmaImpliesNoLemma);
+      if (!wpNoLemmaImpliesNoLemma) {
+        llvm::errs() << fmt::format(
+            "[backward] pob {} on the path {} is not consecutive\n", pob->id,
+            state->constraints.path().toString());
+        pob->lemmaCheckData->wasConsecutionContradicted = true;
+      }
+    }
+    return;
+  }
 
   if (composeResult.success) {
     if (debugPrints.isSet(DebugPrint::Backward)) {
@@ -5018,8 +5049,30 @@ void Executor::goBackward(ref<BackwardAction> action) {
       llvm::errs() << "[backward] Composition failed.\n";
     }
     if (state->isolated && composeResult.conflict.core.size()) {
-      summary.addLemma(
-          new Lemma(state->constraints.path(), composeResult.conflict.core));
+      ref<Lemma> lemma = new Lemma(state->constraints.path(), composeResult.conflict.core);
+      summary.addLemma(lemma);
+      static bool first = true;
+      if (first) {
+        first = false;
+        KBlock *reachBlock = lemma->path.getNext()->parent;
+        const ref<Target> reachBlockTarget =
+            ReachBlockTarget::create(reachBlock);
+        ProofObligation *newPob = new ProofObligation(reachBlockTarget);
+        newPob->kind = ProofObligation::Kind::ConsecutionCheck;
+        // we want to prove that if lemma is satisfied at this point in program,
+        // then it is also satisfied the neares time the execution returns to this
+        // node of control flow graph. To prove this, we assert among all loops that
+        // wpNoLemma -> noLemma (1)
+        // If this _not always true_, than there exist a path where lemma is satisfied
+        // and wpNoLemma is satisified, which implies after following the path the lemma
+        // wil not be satisified. Thus, we want to prove that (1) is true among all the loops
+        newPob->constraints.addConstraint(NotExpr::create(lemma->asExpr()), {});
+        newPob->lemmaCheckData =
+            new LemmaCheckPobData{lemma, reachBlock, reachBlockTarget};
+        newPob->targetForest = TargetForest();
+        newPob->targetForest.add(reachBlockTarget);
+        objectManager->addPob(newPob);
+      }
       if (state->constraints.path().getBlocks().size() > 0 &&
           !summarized.count(
               state->constraints.path().getBlocks().back().block)) {
@@ -5276,7 +5329,11 @@ void Executor::run(std::vector<ExecutionState *> initialStates,
           if (!targetManager->hasTargetedStates(pob->location) &&
               !forCheck->initsLeftForTarget(pob->location) &&
               objectManager->propagationCount[pob] == 0) {
-            if (!pob->parent) {
+            if (!pob->parent && pob->lemmaCheckData != nullptr) {
+              llvm::errs() << fmt::format("[executor] lemma at {} is closed; inductive: {}\n",
+                                          pob->location->toString(),
+                                          !(pob->lemmaCheckData->wasConsecutionContradicted));
+            } else if (!pob->parent) {
               llvm::errs() << "[FALSE POSITIVE] "
                            << "FOUND FALSE POSITIVE AT: "
                            << pob->location->toString() << "\n";

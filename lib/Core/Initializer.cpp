@@ -47,6 +47,11 @@ void ConflictCoreInitializer::addPob(ProofObligation *pob) {
     return; // There has been such a target already
   }
 
+  if (pob->lemmaCheckData != nullptr) {
+    addInit(pob->lemmaCheckData->starting_location->getFirstInstruction(), pob->lemmaCheckData->reach_block_target);
+    return;
+  }
+
   if (pob->location->getBlock()->parent->entryKBlock !=
       pob->location->getBlock()) {
     auto backstep = cgd->getNearestPredicateSatisfying(

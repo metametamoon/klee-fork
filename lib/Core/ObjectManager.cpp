@@ -12,6 +12,7 @@
 
 #include "llvm/Support/CommandLine.h"
 #include <algorithm>
+#include <signal.h>
 
 using namespace llvm;
 using namespace klee;
@@ -300,7 +301,7 @@ void ObjectManager::checkReachedPobs() {
     auto reached = state->getLocationTarget();
     if (reached && pobs.count(reached)) {
       for (auto pob : pobs.at(reached)) {
-        if (!pob->parent) {
+        if (!pob->parent && pob->lemmaCheckData == nullptr) {
           if (debugPrints.isSet(DebugPrint::ClosePob)) {
             llvm::errs() << "[close pob] Pob closed due to forward reach at: "
                          << pob->location->toString() << "\n";
@@ -326,7 +327,7 @@ void ObjectManager::addTargetedConflict(ref<TargetedConflict> conflict) {
 }
 
 void ObjectManager::addPob(ProofObligation *pob) {
-  assert(!pobExists(pob));
+  assert(pob->lemmaCheckData != nullptr || !pobExists(pob));
 
   if (!pob->parent) {
     if (debugPrints.isSet(DebugPrint::RootPob)) {
