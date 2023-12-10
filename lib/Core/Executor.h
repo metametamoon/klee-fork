@@ -769,6 +769,9 @@ private:
   const KBlock *getKBlock(const llvm::BasicBlock *bb) const;
   const KFunction *getKFunction(const llvm::Function *f) const;
 
+  void createConsecutionCheckProofObligation(LemmaCheckPobData *lemmaCheckData);
+  void createInitiationCheckProofObligation(LemmaCheckPobData *lemmaCheckData);
+
 public:
   Executor(llvm::LLVMContext &ctx, const InterpreterOptions &opts,
            InterpreterHandler *ie);

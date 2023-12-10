@@ -4927,6 +4927,17 @@ void Executor::goBackward(ref<BackwardAction> action) {
   // Conflict::core_ty conflictCore;
   // ExprHashMap<ref<Expr>> rebuildMap;
 
+  if (pob->kind == ProofObligation::Kind::InitiationCheck) {
+    auto pathBlocks = state->constraints.path().getBlocks();
+    for (auto const &pathEntry : pathBlocks) {
+      if (pathEntry.block == pob->lemmaCheckData->starting_location) {
+        // in initiation check, we are looking for paths that do not contain the
+        // target block
+        return;
+      }
+    }
+  }
+
   bool isGoodConsecutionCheckProp =
       (pob->kind == ProofObligation::Kind::ConsecutionCheck) &&
       state->getInitPCBlock() == pob->lemmaCheckData->starting_location;
@@ -4975,6 +4986,16 @@ void Executor::goBackward(ref<BackwardAction> action) {
       llvm::errs() << "[backward] Composition sucessful.\n";
     }
     if (state->finalComposing) {
+      if (pob->kind == ProofObligation::Kind::InitiationCheck) {
+        assert(pob->root->lemmaCheckData != nullptr);
+        pob->root->lemmaCheckData->wasInitiationContradicted = true;
+        llvm::errs() << fmt::format("[close pob] initiation for root pob {} was contradicted\n", pob->root->id);
+        /*
+         * TODO it might be a good idea to kill the root pob here with all of its descendants.
+         * Is it possible though?
+         */
+        return;
+      }
       if (auto error = dyn_cast<ReproduceErrorTarget>(pob->root->location)) {
         if (error->isThatError(klee::MustBeNullPointerException) &&
             !error->isThatError(klee::MayBeNullPointerException)) {
@@ -5048,30 +5069,18 @@ void Executor::goBackward(ref<BackwardAction> action) {
     if (debugPrints.isSet(DebugPrint::Backward)) {
       llvm::errs() << "[backward] Composition failed.\n";
     }
-    if (state->isolated && composeResult.conflict.core.size()) {
+    if (state->isolated && composeResult.conflict.core.size() &&
+        pob->kind == ProofObligation::Kind::Normal) { // not interested if we are not
       ref<Lemma> lemma = new Lemma(state->constraints.path(), composeResult.conflict.core);
       summary.addLemma(lemma);
       static bool first = true;
       if (first) {
         first = false;
         KBlock *reachBlock = lemma->path.getNext()->parent;
-        const ref<Target> reachBlockTarget =
-            ReachBlockTarget::create(reachBlock);
-        ProofObligation *newPob = new ProofObligation(reachBlockTarget);
-        newPob->kind = ProofObligation::Kind::ConsecutionCheck;
-        // we want to prove that if lemma is satisfied at this point in program,
-        // then it is also satisfied the neares time the execution returns to this
-        // node of control flow graph. To prove this, we assert among all loops that
-        // wpNoLemma -> noLemma (1)
-        // If this _not always true_, than there exist a path where lemma is satisfied
-        // and wpNoLemma is satisified, which implies after following the path the lemma
-        // wil not be satisified. Thus, we want to prove that (1) is true among all the loops
-        newPob->constraints.addConstraint(NotExpr::create(lemma->asExpr()), {});
-        newPob->lemmaCheckData =
-            new LemmaCheckPobData{lemma, reachBlock, reachBlockTarget};
-        newPob->targetForest = TargetForest();
-        newPob->targetForest.add(reachBlockTarget);
-        objectManager->addPob(newPob);
+        const ref<Target> reachBlockTarget = ReachBlockTarget::create(reachBlock);
+        LemmaCheckPobData *lemmaCheckData = new LemmaCheckPobData{lemma, reachBlock, reachBlockTarget};
+        createConsecutionCheckProofObligation(lemmaCheckData);
+        createInitiationCheckProofObligation(lemmaCheckData);
       }
       if (state->constraints.path().getBlocks().size() > 0 &&
           !summarized.count(
@@ -5081,6 +5090,37 @@ void Executor::goBackward(ref<BackwardAction> action) {
       }
     }
   }
+}
+
+void Executor::createConsecutionCheckProofObligation(LemmaCheckPobData *lemmaCheckData) {
+  ProofObligation *newPob = new ProofObligation(lemmaCheckData->reach_block_target);
+  newPob->kind = ProofObligation::Kind::ConsecutionCheck;
+  // we want to prove that if lemma is satisfied at this point in program,
+  // then it is also satisfied the neares time the execution returns to this
+  // node of control flow graph. To prove this, we assert among all loops that
+  // wpNoLemma -> noLemma (1)
+  // If this _not always true_, than there exist a path where lemma is satisfied
+  // and wpNoLemma is satisified, which implies after following the path the lemma
+  // wil not be satisified. Thus, we want to prove that (1) is true among all the loops
+  newPob->constraints.addConstraint(NotExpr::create(lemmaCheckData->lemma_to_check->asExpr()), {});
+
+  newPob->lemmaCheckData = lemmaCheckData;
+  newPob->targetForest = TargetForest();
+  newPob->targetForest.add(lemmaCheckData->reach_block_target);
+  objectManager->addPob(newPob);
+}
+
+void Executor::createInitiationCheckProofObligation(LemmaCheckPobData *lemmaCheckData) {
+  ProofObligation *newPob = new ProofObligation(lemmaCheckData->reach_block_target);
+  newPob->kind = ProofObligation::Kind::InitiationCheck;
+  // if this is able to make it to the final composing, then there exists an execution
+  // that contradicts the initiation check
+  newPob->constraints.addConstraint(NotExpr::create(lemmaCheckData->lemma_to_check->asExpr()), {});
+
+  newPob->lemmaCheckData = lemmaCheckData;
+  newPob->targetForest = TargetForest();
+  newPob->targetForest.add(lemmaCheckData->reach_block_target);
+  objectManager->addPob(newPob);
 }
 
 void Executor::closeProofObligation(ProofObligation *pob) {
@@ -5329,10 +5369,14 @@ void Executor::run(std::vector<ExecutionState *> initialStates,
           if (!targetManager->hasTargetedStates(pob->location) &&
               !forCheck->initsLeftForTarget(pob->location) &&
               objectManager->propagationCount[pob] == 0) {
-            if (!pob->parent && pob->lemmaCheckData != nullptr) {
-              llvm::errs() << fmt::format("[executor] lemma at {} is closed; inductive: {}\n",
+            if (!pob->parent && pob->kind == ProofObligation::Kind::ConsecutionCheck) {
+              llvm::errs() << fmt::format("[executor] consecution check pob at {} is closed; consecutive proven: {}\n",
                                           pob->location->toString(),
                                           !(pob->lemmaCheckData->wasConsecutionContradicted));
+            } else if (!pob->parent && pob->kind == ProofObligation::Kind::InitiationCheck) {
+                llvm::errs() << fmt::format("[executor] initiation check pob at {} is closed; initiation proven: {}\n",
+                                            pob->location->toString(),
+                                            !(pob->lemmaCheckData->wasInitiationContradicted));
             } else if (!pob->parent) {
               llvm::errs() << "[FALSE POSITIVE] "
                            << "FOUND FALSE POSITIVE AT: "

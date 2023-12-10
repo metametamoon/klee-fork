@@ -43,11 +43,11 @@ void ConflictCoreInitializer::update(const pobs_ty &added,
 void ConflictCoreInitializer::addPob(ProofObligation *pob) {
   auto target = pob->location;
   knownTargets[target]++;
-  if (knownTargets[target] > 1) {
+  if (knownTargets[target] > 1 && pob->kind == ProofObligation::Kind::Normal) {
     return; // There has been such a target already
   }
 
-  if (pob->lemmaCheckData != nullptr) {
+  if (pob->kind == ProofObligation::Kind::ConsecutionCheck) {
     addInit(pob->lemmaCheckData->starting_location->getFirstInstruction(), pob->lemmaCheckData->reach_block_target);
     return;
   }

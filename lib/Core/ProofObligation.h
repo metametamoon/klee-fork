@@ -30,7 +30,7 @@ struct LemmaCheckPobData {
     KBlock* starting_location;
     ref<Target> reach_block_target;
     std::optional<bool> wasConsecutionContradicted = std::nullopt;
-    std::optional<bool> wasInitiationProven = std::nullopt;
+    std::optional<bool> wasInitiationContradicted = std::nullopt;
 };
 
 
