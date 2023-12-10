@@ -2634,6 +2634,9 @@ void Executor::executeInstruction(ExecutionState &state, KInstruction *ki) {
       }
     }
   }
+  if (ki == ki->parent->getFirstInstruction() && locationSummary.count(ki->parent) > 0) {
+    state.addConstraint(locationSummary[ki->parent], {});
+  }
 
   switch (i->getOpcode()) {
     // Control flow
@@ -5370,13 +5373,21 @@ void Executor::run(std::vector<ExecutionState *> initialStates,
               !forCheck->initsLeftForTarget(pob->location) &&
               objectManager->propagationCount[pob] == 0) {
             if (!pob->parent && pob->kind == ProofObligation::Kind::ConsecutionCheck) {
-              llvm::errs() << fmt::format("[executor] consecution check pob at {} is closed; consecutive proven: {}\n",
+              llvm::errs() << fmt::format("[executor] consecution check pob at {} is closed; consecution contradicted: {}\n",
                                           pob->location->toString(),
-                                          !(pob->lemmaCheckData->wasConsecutionContradicted));
+                                          !pob->lemmaCheckData->wasConsecutionContradicted.has_value());
+              if (!pob->lemmaCheckData->wasConsecutionContradicted.has_value()) {
+                pob->lemmaCheckData->wasConsecutionContradicted = false;
+              }
+              considerLemmaCheckData(pob->lemmaCheckData);
             } else if (!pob->parent && pob->kind == ProofObligation::Kind::InitiationCheck) {
-                llvm::errs() << fmt::format("[executor] initiation check pob at {} is closed; initiation proven: {}\n",
+                llvm::errs() << fmt::format("[executor] initiation check pob at {} is closed; initiation contradicted: {}\n",
                                             pob->location->toString(),
-                                            !(pob->lemmaCheckData->wasInitiationContradicted));
+                                            pob->lemmaCheckData->wasInitiationContradicted.has_value());
+                if (!pob->lemmaCheckData->wasInitiationContradicted.has_value()) {
+                  pob->lemmaCheckData->wasInitiationContradicted = false;
+                }
+                considerLemmaCheckData(pob->lemmaCheckData);
             } else if (!pob->parent) {
               llvm::errs() << "[FALSE POSITIVE] "
                            << "FOUND FALSE POSITIVE AT: "
@@ -8558,6 +8569,14 @@ void Executor::dumpStates() {
   ::dumpStates = 0;
 }
 
+void Executor::considerLemmaCheckData(LemmaCheckPobData *lemmaCheckPobData) {
+  if (lemmaCheckPobData->wasInitiationContradicted.has_value() &&
+      lemmaCheckPobData->wasInitiationContradicted.value() == false &&
+      lemmaCheckPobData->wasConsecutionContradicted.has_value() &&
+      lemmaCheckPobData->wasConsecutionContradicted.value() == false) {
+    locationSummary[lemmaCheckPobData->starting_location] = lemmaCheckPobData->lemma_to_check->asExpr();
+  }
+}
 ///
 
 Interpreter *Interpreter::create(LLVMContext &ctx,
