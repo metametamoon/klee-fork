@@ -4772,7 +4772,18 @@ Executor::compose(const ExecutionState &state, const PathConstraints &pob,
     }
     timers.invoke();
   }
-
+  if (this->locationSummary.count(state.getInitPCBlock())) {
+    auto my_lemma = this->locationSummary[state.getInitPCBlock()];
+    bool mayBeTrue = false;
+    solver->mayBeTrue(composer.state.constraints.cs(), my_lemma, mayBeTrue,
+                      composer.state.queryMetaData);
+    if (!mayBeTrue) {
+      result.success = false;
+      return result;
+    }
+  }
+  // solver->mayBeTrue(composer.state.constraints.cs(), my_lemma, composer.state.queryMetaData);
+  // if returned false -> result.success = false,
   if (nullPointerExpr) {
     auto composedNPE = composer.compose(nullPointerExpr);
     assert(!composedNPE.first->isFalse());
@@ -5099,7 +5110,7 @@ void Executor::createConsecutionCheckProofObligation(LemmaCheckPobData *lemmaChe
   ProofObligation *newPob = new ProofObligation(lemmaCheckData->reach_block_target);
   newPob->kind = ProofObligation::Kind::ConsecutionCheck;
   // we want to prove that if lemma is satisfied at this point in program,
-  // then it is also satisfied the neares time the execution returns to this
+  // then it is also satisfied the nearest time the execution returns to this
   // node of control flow graph. To prove this, we assert among all loops that
   // wpNoLemma -> noLemma (1)
   // If this _not always true_, than there exist a path where lemma is satisfied
