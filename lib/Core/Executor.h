@@ -257,6 +257,7 @@ private:
   std::unordered_map<llvm::BasicBlock *, unsigned> failedTransitionsTo;
 
   bool hasStateWhichCanReachSomeTarget = false;
+  std::unordered_map<KBlock*, ref<Expr>> locationSummary;
 
   /// Return the typeid corresponding to a certain `type_info`
   ref<ConstantExpr> getEhTypeidFor(ref<Expr> type_info);
@@ -769,6 +770,9 @@ private:
   const KBlock *getKBlock(const llvm::BasicBlock *bb) const;
   const KFunction *getKFunction(const llvm::Function *f) const;
 
+  void createConsecutionCheckProofObligation(LemmaCheckPobData *lemmaCheckData);
+  void createInitiationCheckProofObligation(LemmaCheckPobData *lemmaCheckData);
+  void considerLemmaCheckData(LemmaCheckPobData* lemmaCheckPobData);
 public:
   Executor(llvm::LLVMContext &ctx, const InterpreterOptions &opts,
            InterpreterHandler *ie);

@@ -29,7 +29,13 @@ struct Lemma {
 
   bool operator!=(const Lemma &other) { return !(*this == other); }
 
-  ref<Expr> asExpr();
+  ref<Expr> asExpr() const {
+      ref<Expr> expression = Expr::createTrue();
+      for (auto const & i: constraints) {
+        expression = AndExpr::create(expression, i);
+      }
+      return expression;
+  };
 
   int compare(const Lemma &b) const {
     if (path == b.path && constraints == b.constraints) {

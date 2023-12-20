@@ -10,6 +10,7 @@
 #include "klee/Module/KModule.h"
 #include "klee/Module/Target.h"
 #include "klee/Module/TargetForest.h"
+#include "klee/Expr/Lemma.h"
 
 #include <queue>
 #include <sstream>
@@ -24,8 +25,23 @@ struct ProofObligationIDCompare {
   bool operator()(const ProofObligation *a, const ProofObligation *b) const;
 };
 
+struct LemmaCheckPobData {
+    ref<Lemma> lemma_to_check;
+    KBlock* starting_location;
+    ref<Target> reach_block_target;
+    std::optional<bool> wasConsecutionContradicted = std::nullopt;
+    std::optional<bool> wasInitiationContradicted = std::nullopt;
+};
+
+
 class ProofObligation {
 public:
+  enum class Kind {
+    Normal,
+    ConsecutionCheck,
+    InitiationCheck
+  };
+
   ProofObligation(ref<Target> _location)
       : id(nextID++), parent(nullptr), root(this), location(_location),
         nullPointerExpr(nullptr) {}
@@ -62,6 +78,7 @@ private:
     pob->propagationCount = propagationCount;
     pob->targetForest = targetForest;
     pob->isTargeted_ = isTargeted_;
+    pob->kind = kind;
     children.insert(pob);
     return pob;
   }
@@ -83,7 +100,8 @@ public:
   ImmutableList<Symbolic> symbolics;
 
   ref<Expr> nullPointerExpr;
-
+  LemmaCheckPobData* lemmaCheckData = nullptr;
+  Kind kind = Kind::Normal; // invariant: ConsecutiveCheck, InitiationCheck -> lemmaCheckData != nullptr
 private:
   static unsigned nextID;
   bool isTargeted_ = false;
